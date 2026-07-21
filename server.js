@@ -10,7 +10,7 @@ const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
 const HUBSPOT_SERVICE_KEY = process.env.HUBSPOT_SERVICE_KEY;
 
-if (!SLACK_BOT_TOKEN || !SLACK_SIGNING_SECRET || !SLACK_CHANNEL_ID || !HUBSPOT_ACCESS_TOKEN) {
+if (!SLACK_BOT_TOKEN || !SLACK_SIGNING_SECRET || !SLACK_CHANNEL_ID || !HUBSPOT_SERVICE_KEY) {
   console.error('Missing required environment variables.');
   process.exit(1);
 }
