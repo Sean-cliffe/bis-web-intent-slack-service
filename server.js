@@ -8,7 +8,7 @@ const port = process.env.PORT || 10000;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
-const HUBSPOT_ACCESS_TOKEN = process.env.HUBSPOT_ACCESS_TOKEN;
+const HUBSPOT_SERVICE_KEY = process.env.HUBSPOT_SERVICE_KEY;
 
 if (!SLACK_BOT_TOKEN || !SLACK_SIGNING_SECRET || !SLACK_CHANNEL_ID || !HUBSPOT_ACCESS_TOKEN) {
   console.error('Missing required environment variables.');
@@ -100,7 +100,7 @@ async function updateHubSpotCompany(companyId, decision) {
 
   const response = await axios.patch(url, body, {
     headers: {
-      Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${HUBSPOT_SERVICE_KEY}`,
       'Content-Type': 'application/json'
     }
   });
