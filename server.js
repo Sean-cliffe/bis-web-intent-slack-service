@@ -18,8 +18,17 @@ if (!SLACK_BOT_TOKEN || !SLACK_SIGNING_SECRET || !SLACK_CHANNEL_ID || !HUBSPOT_S
 // HubSpot sends JSON
 app.use('/hubspot/web-intent', express.json());
 
-// Slack interactivity sends form-encoded payload
-app.use('/slack/interactions', express.urlencoded({ extended: true }));
+// Slack interactivity sends x-www-form-urlencoded payload
+// Capture raw body exactly as Slack sent it for signature verification
+app.use(
+  '/slack/interactions',
+  express.urlencoded({
+    extended: true,
+    verify: (req, res, buf) => {
+      req.rawBody = buf.toString();
+    }
+  })
+);
 
 app.get('/health', (req, res) => {
   res.status(200).json({ ok: true });
@@ -112,13 +121,16 @@ function verifySlackSignature(req) {
   const slackSignature = req.headers['x-slack-signature'];
   const slackTimestamp = req.headers['x-slack-request-timestamp'];
 
-  if (!slackSignature || !slackTimestamp) return false;
+  if (!slackSignature || !slackTimestamp || !req.rawBody) {
+    return false;
+  }
 
   const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 60 * 5;
-  if (Number(slackTimestamp) < fiveMinutesAgo) return false;
+  if (Number(slackTimestamp) < fiveMinutesAgo) {
+    return false;
+  }
 
-  const rawBody = new URLSearchParams(req.body).toString();
-  const baseString = `v0:${slackTimestamp}:${rawBody}`;
+  const baseString = `v0:${slackTimestamp}:${req.rawBody}`;
 
   const hmac = crypto
     .createHmac('sha256', SLACK_SIGNING_SECRET)
@@ -140,11 +152,7 @@ function verifySlackSignature(req) {
 // 1) HubSpot -> this service
 app.post('/hubspot/web-intent', async (req, res) => {
   try {
-    const {
-      companyId,
-      companyName,
-      alertType
-    } = req.body;
+    const { companyId, companyName, alertType } = req.body;
 
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
@@ -180,9 +188,9 @@ app.post('/slack/interactions', async (req, res) => {
     }
 
     const payload = JSON.parse(req.body.payload);
-    const action = payload.actions && payload.actions[0];
+    const action = payload.actions?.[0];
 
-    if (!action || !action.value) {
+    if (!action?.value) {
       return res.status(400).send('Missing action payload');
     }
 
