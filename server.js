@@ -8,7 +8,7 @@ const port = process.env.PORT || 10000;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
-const HUBSPOT_SERVICE_KEY = process.env.HUBSPOT_SERVICE_KEY;
+const HUBSPOT_ACCESS_TOKEN = process.env.HUBSPOT_SERVICE_KEY;
 
 if (!SLACK_BOT_TOKEN || !SLACK_SIGNING_SECRET || !SLACK_CHANNEL_ID || !HUBSPOT_SERVICE_KEY) {
   console.error('Missing required environment variables.');
@@ -18,52 +18,12 @@ if (!SLACK_BOT_TOKEN || !SLACK_SIGNING_SECRET || !SLACK_CHANNEL_ID || !HUBSPOT_S
 // HubSpot sends JSON
 app.use('/hubspot/web-intent', express.json());
 
-// Slack interactivity sends x-www-form-urlencoded payload
-// Capture RAW body for signature verification
-app.use(
-  '/slack/interactions',
-  express.urlencoded({
-    extended: true,
-    verify: (req, res, buf) => {
-      req.rawBody = buf.toString();
-    }
-  })
-);
+// Slack interactivity sends form-encoded payload
+app.use('/slack/interactions', express.urlencoded({ extended: true }));
 
 app.get('/health', (req, res) => {
   res.status(200).json({ ok: true });
 });
-
-function verifySlackSignature(req) {
-  const slackSignature = req.headers['x-slack-signature'];
-  const slackTimestamp = req.headers['x-slack-request-timestamp'];
-
-  if (!slackSignature || !slackTimestamp || !req.rawBody) {
-    return false;
-  }
-
-  const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 60 * 5;
-  if (Number(slackTimestamp) < fiveMinutesAgo) {
-    return false;
-  }
-
-  const baseString = `v0:${slackTimestamp}:${req.rawBody}`;
-  const hmac = crypto
-    .createHmac('sha256', SLACK_SIGNING_SECRET)
-    .update(baseString)
-    .digest('hex');
-
-  const computedSignature = `v0=${hmac}`;
-
-  try {
-    return crypto.timingSafeEqual(
-      Buffer.from(computedSignature, 'utf8'),
-      Buffer.from(slackSignature, 'utf8')
-    );
-  } catch {
-    return false;
-  }
-}
 
 function buildSlackMessage({ companyId, companyName, alertType }) {
   return {
@@ -148,10 +108,43 @@ async function updateHubSpotCompany(companyId, decision) {
   return response.data;
 }
 
+function verifySlackSignature(req) {
+  const slackSignature = req.headers['x-slack-signature'];
+  const slackTimestamp = req.headers['x-slack-request-timestamp'];
+
+  if (!slackSignature || !slackTimestamp) return false;
+
+  const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 60 * 5;
+  if (Number(slackTimestamp) < fiveMinutesAgo) return false;
+
+  const rawBody = new URLSearchParams(req.body).toString();
+  const baseString = `v0:${slackTimestamp}:${rawBody}`;
+
+  const hmac = crypto
+    .createHmac('sha256', SLACK_SIGNING_SECRET)
+    .update(baseString)
+    .digest('hex');
+
+  const computedSignature = `v0=${hmac}`;
+
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(computedSignature, 'utf8'),
+      Buffer.from(slackSignature, 'utf8')
+    );
+  } catch {
+    return false;
+  }
+}
+
 // 1) HubSpot -> this service
 app.post('/hubspot/web-intent', async (req, res) => {
   try {
-    const { companyId, companyName, alertType } = req.body;
+    const {
+      companyId,
+      companyName,
+      alertType
+    } = req.body;
 
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
@@ -187,9 +180,9 @@ app.post('/slack/interactions', async (req, res) => {
     }
 
     const payload = JSON.parse(req.body.payload);
-    const action = payload.actions?.[0];
+    const action = payload.actions && payload.actions[0];
 
-    if (!action?.value) {
+    if (!action || !action.value) {
       return res.status(400).send('Missing action payload');
     }
 
