@@ -10,19 +10,95 @@ const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
 const HUBSPOT_SERVICE_KEY = process.env.HUBSPOT_SERVICE_KEY;
 
-if (!SLACK_BOT_TOKEN || !SLACK_SIGNING_SECRET || !SLACK_CHANNEL_ID || !HUBSPOT_SERVICE_KEY) {
-  console.error('Missing required environment variables.');
-  process.exit(1);
-}
-
-// HubSpot sends JSON
 app.use('/hubspot/web-intent', express.json());
 
-// Slack interactivity sends form-encoded payload
-app.use('/slack/interactions', express.urlencoded({ extended: true }));
+// Capture RAW body for Slack signature verification
+app.use('/slack/interactions', express.urlencoded({
+  extended: true,
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString();
+  }
+}));
 
-app.get('/health', (req, res) => {
-  res.status(200).json({ ok: true });
+function verifySlackSignature(req) {
+  const slackSignature = req.headers['x-slack-signature'];
+  const slackTimestamp = req.headers['x-slack-request-timestamp'];
+
+  if (!slackSignature || !slackTimestamp || !req.rawBody) {
+    return false;
+  }
+
+  const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 60 * 5;
+  if (Number(slackTimestamp) < fiveMinutesAgo) {
+    return false;
+  }
+
+  const baseString = `v0:${slackTimestamp}:${req.rawBody}`;
+  const hmac = crypto
+    .createHmac('sha256', SLACK_SIGNING_SECRET)
+    .update(baseString)
+    .digest('hex');
+
+  const computedSignature = `v0=${hmac}`;
+
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(computedSignature, 'utf8'),
+      Buffer.from(slackSignature, 'utf8')
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function updateHubSpotCompany(companyId, decision) {
+  const url = `https://api.hubapi.com/crm/v3/objects/companies/${companyId}`;
+
+  return axios.patch(
+    url,
+    {
+      properties: {
+        slack_follow_up_status: decision
+      }
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${HUBSPOT_SERVICE_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+}
+
+app.post('/slack/interactions', async (req, res) => {
+  try {
+    if (!verifySlackSignature(req)) {
+      return res.status(401).send('Invalid Slack signature');
+    }
+
+    const payload = JSON.parse(req.body.payload);
+    const action = payload.actions?.[0];
+
+    if (!action?.value) {
+      return res.status(400).send('Missing action value');
+    }
+
+    const { companyId, decision } = JSON.parse(action.value);
+
+    await updateHubSpotCompany(companyId, decision);
+
+    return res.json({
+      replace_original: true,
+      text: `Decision recorded: ${decision}`
+    });
+  } catch (error) {
+    console.error('Slack interaction error:', error.response?.data || error.message);
+    return res.status(500).send('Failed to process interaction');
+  }
+});
+
+app.listen(port, () => {
+  console.log(`Server listening on port ${port}`);
 });
 
 function buildSlackMessage({ companyId, companyName, alertType }) {
